@@ -5,6 +5,7 @@ import session from "express-session";
 import passport from "passport";
 import { Strategy } from "passport-local";
 import env from "dotenv";
+import GoogleStrategy from "passport-google-oauth2";
 
 const app = express();
 const port = 4000;
@@ -17,7 +18,7 @@ app.use(express.static("public"));
 //establish session
 app.use(
   session({
-    secret: process.env.SESSION_SECRET,
+    secret: process.env.SECRET_SESSION,
     resave: false,
     saveUninitialized: true,
     cookie: { maxAge: 1000 * 60 * 60 * 24 },
@@ -51,13 +52,24 @@ app.get("/dashboard", (req, res) => {
     res.redirect("/login");
   }
 });
+app.get(
+  "/auth/google",
+  passport.authenticate("google", {
+    scope: ["email", "profile"],
+  })
+);
+app.get(
+  "/auth/google/dashboard",
+  passport.authenticate("google", {
+    successRedirect: "/dashboard",
+    failureRedirect: "/login",
+  })
+);
 //post requests
 //logging out users
 app.post("/logout", (req, res) => {
-  req.logout(function (err) {
-    if (err) {
-      return next(err);
-    }
+  req.logout((err) => {
+    if (err) return next(err);
     res.redirect("/");
   });
 });
@@ -107,6 +119,7 @@ app.post(
 );
 
 passport.use(
+  "local",
   new Strategy(async function verify(username, password, cb) {
     try {
       const result = await db.query("SELECT * FROM users WHERE email = $1", [
@@ -134,6 +147,40 @@ passport.use(
       console.log(err);
     }
   })
+);
+
+//google strategy
+passport.use(
+  "google",
+  new GoogleStrategy(
+    {
+      clientID: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      callbackURL: "http://localhost:4000/auth/google/dashboard",
+      userProfileURL: "https://www.googleapis.com/oauth2/v3/userinfo",
+    },
+    async (accessToken, refreshToken, profile, cb) => {
+      console.log(accessToken, refreshToken);
+
+      //check db if user exists or create new user
+      try {
+        const result = await db.query("SELECT * FROM users WHERE email = $1", [
+          profile.email,
+        ]);
+        if (result.rows.length === 0) {
+          const newUser = await db.query(
+            "INSERT INTO users (email, password) VALUES ($1, $2)",
+            [profile.email, "google"]
+          );
+          cb(null, newUser.rows[0]);
+        } else {
+          cb(null, result.rows[0]);
+        }
+      } catch (err) {
+        cb(err);
+      }
+    }
+  )
 );
 
 //persist user info
